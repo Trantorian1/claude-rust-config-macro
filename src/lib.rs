@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{parse_macro_input, DeriveInput, Data, Fields, Field, Ident};
 
-#[proc_macro_derive(Config, attributes(incomplete))]
-pub fn derive_config(input: TokenStream) -> TokenStream {
+#[proc_macro_derive(Builder, attributes(incomplete))]
+pub fn derive_builder(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     // Extract struct name and fields
@@ -41,12 +41,12 @@ fn extract_fields(input: &DeriveInput) -> syn::Result<Vec<Field>> {
             Fields::Named(fields) => Ok(fields.named.iter().cloned().collect()),
             _ => Err(syn::Error::new_spanned(
                 &data_struct.fields,
-                "Config can only be derived for structs with named fields",
+                "Builder can only be derived for structs with named fields",
             )),
         },
         _ => Err(syn::Error::new_spanned(
             input,
-            "Config can only be derived for structs",
+            "Builder can only be derived for structs",
         )),
     }
 }
