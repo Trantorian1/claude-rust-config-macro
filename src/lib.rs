@@ -8,7 +8,7 @@ pub fn derive_config(input: TokenStream) -> TokenStream {
 
     // Extract struct name and fields
     let struct_name = &input.ident;
-    let fields = match extract_fields(&input.data) {
+    let fields = match extract_fields(&input) {
         Ok(fields) => fields,
         Err(err) => return err.to_compile_error().into(),
     };
@@ -30,8 +30,8 @@ pub fn derive_config(input: TokenStream) -> TokenStream {
 }
 
 /// Extract named fields from struct
-fn extract_fields(data: &Data) -> syn::Result<Vec<Field>> {
-    match data {
+fn extract_fields(input: &DeriveInput) -> syn::Result<Vec<Field>> {
+    match &input.data {
         Data::Struct(data_struct) => match &data_struct.fields {
             Fields::Named(fields) => Ok(fields.named.iter().cloned().collect()),
             _ => Err(syn::Error::new_spanned(
@@ -40,7 +40,7 @@ fn extract_fields(data: &Data) -> syn::Result<Vec<Field>> {
             )),
         },
         _ => Err(syn::Error::new_spanned(
-            data,
+            input,
             "Config can only be derived for structs",
         )),
     }
