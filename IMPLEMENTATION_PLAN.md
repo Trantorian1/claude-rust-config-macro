@@ -19,9 +19,17 @@ struct Config {
 ### Generated Output (`config_generated.rs`)
 The macro must generate:
 1. A generic struct with type parameters for each field
-2. Type aliases for complete and incomplete configurations
+2. Type aliases for configurations:
+   - `{StructName}Complete`: Always generated with all original types
+   - `{StructName}Incomplete`: Only generated if `#[incomplete]` markers exist
+   - Multiple `#[incomplete]` fields all become `()` in the incomplete alias
 3. A `new()` constructor returning all fields as `()`
 4. Builder methods (`with_*`) for each field
+
+**Key Rules:**
+- Type alias names adapt to struct name (e.g., `Foo` → `FooComplete`, `FooIncomplete`)
+- `{StructName}Incomplete` is NOT generated if there are no `#[incomplete]` markers
+- All fields marked `#[incomplete]` become `()` in the same incomplete type alias
 
 ## Implementation Steps
 
@@ -73,15 +81,19 @@ The macro must generate:
 ### 5. Generate Type Aliases
 **Function:** `generate_type_aliases()`
 
-- [ ] Generate `ConfigComplete` type alias:
+- [ ] Generate `{StructName}Complete` type alias (always):
   - Use all original field types
+  - Name adapts to struct name (e.g., `Config` → `ConfigComplete`, `Foo` → `FooComplete`)
   ```rust
   pub type ConfigComplete = Config<url::Url, String, zeroize::Zeroizing<String>>;
   ```
 
-- [ ] Generate `ConfigIncomplete` type alias:
+- [ ] Generate `{StructName}Incomplete` type alias (only if `#[incomplete]` markers exist):
   - Fields with `#[incomplete]` attribute → `()`
   - All other fields → original types
+  - If multiple fields have `#[incomplete]`, they all become `()` in the same type alias
+  - Name adapts to struct name (e.g., `Config` → `ConfigIncomplete`, `Foo` → `FooIncomplete`)
+  - **Important:** Skip this entirely if no `#[incomplete]` markers are present
   ```rust
   pub type ConfigIncomplete = Config<url::Url, String, ()>;
   ```
@@ -127,8 +139,15 @@ The macro must generate:
 ### 8. Testing Strategy
 
 - [ ] Create test module in `lib.rs` or separate `tests/` directory
-- [ ] Test basic struct with all required fields
-- [ ] Test struct with `#[incomplete]` attributes
+- [ ] Test basic struct with all required fields (no `#[incomplete]` markers)
+  - Verify `{StructName}Complete` is generated
+  - Verify `{StructName}Incomplete` is NOT generated
+- [ ] Test struct with single `#[incomplete]` attribute
+  - Verify both type aliases are generated correctly
+- [ ] Test struct with multiple `#[incomplete]` attributes
+  - Verify all marked fields become `()` in the incomplete alias
+- [ ] Test dynamic naming (struct named something other than `Config`)
+  - Verify type aliases match struct name
 - [ ] Test that builder pattern compiles correctly
 - [ ] Test that incomplete configurations cannot be used where complete ones are needed
 - [ ] Verify generated code matches expected output
@@ -147,16 +166,24 @@ The macro must generate:
 1. **`extract_incomplete_attribute(field: &Field) -> bool`**
    - Check if field has `#[incomplete]` attribute
 
-2. **`field_name_to_type_param(name: &Ident) -> Ident`**
+2. **`has_incomplete_fields(fields: &[Field]) -> bool`**
+   - Check if ANY field has `#[incomplete]` attribute
+   - Used to determine if incomplete type alias should be generated
+
+3. **`field_name_to_type_param(name: &Ident) -> Ident`**
    - Convert field name to PascalCase type parameter
    - Example: `url` → `Url`
 
-3. **`generate_generic_params(fields: &[Field]) -> Vec<Ident>`**
+4. **`generate_generic_params(fields: &[Field]) -> Vec<Ident>`**
    - Create list of generic type parameters
 
-4. **`generate_field_assignments(fields: &[Field], exclude: Option<&Ident>) -> TokenStream`**
+5. **`generate_field_assignments(fields: &[Field], exclude: Option<&Ident>) -> TokenStream`**
    - Generate field assignments for struct construction
    - Used in builder methods to preserve fields
+
+6. **`create_type_alias_name(struct_name: &Ident, suffix: &str) -> Ident`**
+   - Create type alias name from struct name
+   - Example: `Config` + `"Complete"` → `ConfigComplete`
 
 ### Code Organization
 
@@ -190,17 +217,33 @@ let incomplete = Config::new()
     .with_name("MyApp".to_string());
 
 // Type is: Config<url::Url, String, ()>
-// Which matches ConfigIncomplete
+// Which matches ConfigIncomplete (only generated if #[incomplete] markers exist)
 // Compiler prevents using this where ConfigComplete is required
+```
+
+### Dynamic Naming
+```rust
+#[derive(Config)]
+struct DatabaseConfig {
+    host: String,
+    #[incomplete]
+    password: String,
+}
+
+// Generates:
+// - DatabaseConfigComplete = DatabaseConfig<String, String>
+// - DatabaseConfigIncomplete = DatabaseConfig<String, ()>
 ```
 
 ## Potential Challenges
 
 1. **Type Parameter Naming**: Ensure generated type parameters don't conflict
-2. **Attribute Parsing**: Correctly identify `#[incomplete]` attributes
-3. **Quote Hygiene**: Proper use of `quote!` macro to generate valid Rust code
-4. **Field Ordering**: Maintain consistent field order in all generated code
-5. **Type Path Handling**: Preserve full type paths like `url::Url` and `zeroize::Zeroizing<String>`
+2. **Attribute Parsing**: Correctly identify `#[incomplete]` attributes across multiple fields
+3. **Conditional Type Alias Generation**: Only generate `{StructName}Incomplete` when needed
+4. **Dynamic Naming**: Properly format struct name into type alias names
+5. **Quote Hygiene**: Proper use of `quote!` macro to generate valid Rust code
+6. **Field Ordering**: Maintain consistent field order in all generated code
+7. **Type Path Handling**: Preserve full type paths like `url::Url` and `zeroize::Zeroizing<String>`
 
 ## Success Criteria
 
