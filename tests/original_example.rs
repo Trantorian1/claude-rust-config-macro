@@ -18,20 +18,21 @@ struct Config {
 }
 
 #[test]
-fn test_config_complete_type_exists() {
-    // ConfigComplete should exist and include all three fields
-    let config: ConfigComplete = Config::new()
+fn test_config_build_method() {
+    // build() should return Config when all fields are set
+    let config: Config = ConfigBuilder::new()
         .with_url(mock_types::Url("https://example.com".to_string()))
         .with_name("MyApp".to_string())
-        .with_secret(mock_types::Zeroizing("secret".to_string()));
+        .with_secret(mock_types::Zeroizing("secret".to_string()))
+        .build();
 
-    let _: ConfigComplete = config;
+    let _: Config = config;
 }
 
 #[test]
 fn test_config_incomplete_type_exists() {
     // ConfigIncomplete should exist with secret as ()
-    let config: ConfigIncomplete = Config::new()
+    let config: ConfigIncomplete = ConfigBuilder::new()
         .with_url(mock_types::Url("https://example.com".to_string()))
         .with_name("MyApp".to_string());
 
@@ -40,53 +41,56 @@ fn test_config_incomplete_type_exists() {
 
 #[test]
 fn test_config_new_constructor() {
-    // new() should return Config<(), (), ()>
-    let config = Config::new();
+    // new() should return ConfigBuilder<(), (), ()>
+    let builder = ConfigBuilder::new();
 
-    // Should be able to call all builder methods
-    let config = config
+    // Should be able to call all builder methods and build
+    let config = builder
         .with_url(mock_types::Url("https://example.com".to_string()))
         .with_name("MyApp".to_string())
-        .with_secret(mock_types::Zeroizing("secret".to_string()));
+        .with_secret(mock_types::Zeroizing("secret".to_string()))
+        .build();
 
-    let _: ConfigComplete = config;
+    let _: Config = config;
 }
 
 #[test]
 fn test_config_builder_methods() {
     // Each builder method should consume self and return new type
-    let step1 = Config::new();
+    let step1 = ConfigBuilder::new();
     let step2 = step1.with_url(mock_types::Url("https://example.com".to_string()));
     let step3 = step2.with_name("MyApp".to_string());
 
     // At this point, we have ConfigIncomplete (missing secret)
     let _: ConfigIncomplete = step3;
 
-    // Complete it by adding secret
-    let step4 = Config::new()
+    // Complete it by adding secret and build
+    let step4 = ConfigBuilder::new()
         .with_url(mock_types::Url("https://example.com".to_string()))
         .with_name("MyApp".to_string())
-        .with_secret(mock_types::Zeroizing("secret".to_string()));
+        .with_secret(mock_types::Zeroizing("secret".to_string()))
+        .build();
 
-    let _: ConfigComplete = step4;
+    let _: Config = step4;
 }
 
 #[test]
 fn test_config_typestate_progression() {
     // Demonstrate the typestate pattern progression
-    let config = Config::new()
+    let incomplete_builder = ConfigBuilder::new()
         .with_url(mock_types::Url("https://api.example.com".to_string()))
         .with_name("Production".to_string());
 
     // This is incomplete - can be used where ConfigIncomplete is expected
-    let incomplete_config: ConfigIncomplete = config;
+    let incomplete_config: ConfigIncomplete = incomplete_builder;
 
-    // To get complete config, must add secret
-    let complete_config = Config::new()
+    // To get complete config, must add secret and call build()
+    let complete_config = ConfigBuilder::new()
         .with_url(mock_types::Url("https://api.example.com".to_string()))
         .with_name("Production".to_string())
-        .with_secret(mock_types::Zeroizing("prod-secret".to_string()));
+        .with_secret(mock_types::Zeroizing("prod-secret".to_string()))
+        .build();
 
-    let _: ConfigComplete = complete_config;
+    let _: Config = complete_config;
     let _: ConfigIncomplete = incomplete_config;
 }

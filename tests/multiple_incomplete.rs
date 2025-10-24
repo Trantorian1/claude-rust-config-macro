@@ -15,20 +15,21 @@ struct DatabaseConfig {
 
 #[test]
 fn test_database_config_complete_all_fields() {
-    // DatabaseConfigComplete should require all fields
-    let config: DatabaseConfigComplete = DatabaseConfig::new()
+    // build() should be available when all fields are set
+    let config: DatabaseConfig = DatabaseConfigBuilder::new()
         .with_host("localhost".to_string())
         .with_port(5432)
         .with_username("admin".to_string())
-        .with_password("secret".to_string());
+        .with_password("secret".to_string())
+        .build();
 
-    let _: DatabaseConfigComplete = config;
+    let _: DatabaseConfig = config;
 }
 
 #[test]
 fn test_database_config_incomplete_without_credentials() {
     // DatabaseConfigIncomplete should be available without username and password
-    let config: DatabaseConfigIncomplete = DatabaseConfig::new()
+    let config: DatabaseConfigIncomplete = DatabaseConfigBuilder::new()
         .with_host("localhost".to_string())
         .with_port(5432);
 
@@ -38,27 +39,27 @@ fn test_database_config_incomplete_without_credentials() {
 #[test]
 fn test_database_config_partial_incomplete() {
     // Even with one credential, it's not complete yet
-    let config1 = DatabaseConfig::new()
+    let config1 = DatabaseConfigBuilder::new()
         .with_host("localhost".to_string())
         .with_port(5432)
         .with_username("admin".to_string());
 
     // This is neither complete nor the "pure" incomplete state
-    // But we can verify it's not DatabaseConfigComplete
-    // and we can still add the password
-    let config2 = config1.with_password("secret".to_string());
+    // But we can still add the password and build
+    let config2 = config1.with_password("secret".to_string()).build();
 
-    let _: DatabaseConfigComplete = config2;
+    let _: DatabaseConfig = config2;
 }
 
 #[test]
 fn test_database_config_builder_flexibility() {
     // Can build in different orders
-    let config = DatabaseConfig::new()
+    let config = DatabaseConfigBuilder::new()
         .with_password("secret".to_string())
         .with_username("admin".to_string())
         .with_host("localhost".to_string())
-        .with_port(5432);
+        .with_port(5432)
+        .build();
 
-    let _: DatabaseConfigComplete = config;
+    let _: DatabaseConfig = config;
 }

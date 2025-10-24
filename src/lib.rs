@@ -13,17 +13,22 @@ pub fn derive_config(input: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
+    // Create builder name
+    let builder_name = create_builder_name(struct_name);
+
     // Generate all components
-    let generic_struct = generate_generic_struct(struct_name, &fields);
-    let type_aliases = generate_type_aliases(struct_name, &fields);
-    let constructor = generate_constructor(struct_name, &fields);
-    let builder_methods = generate_builder_methods(struct_name, &fields);
+    let builder_struct = generate_builder_struct(&builder_name, &fields);
+    let type_aliases = generate_type_aliases(struct_name, &builder_name, &fields);
+    let constructor = generate_constructor(&builder_name, &fields);
+    let builder_methods = generate_builder_methods(&builder_name, &fields);
+    let build_method = generate_build_method(struct_name, &builder_name, &fields);
 
     let expanded = quote! {
-        #generic_struct
+        #builder_struct
         #type_aliases
         #constructor
         #builder_methods
+        #build_method
     };
 
     TokenStream::from(expanded)
@@ -67,14 +72,20 @@ fn field_name_to_type_param(name: &Ident) -> Ident {
     Ident::new(&pascal_case, name.span())
 }
 
+/// Create builder name (e.g., "Config" -> "ConfigBuilder")
+fn create_builder_name(struct_name: &Ident) -> Ident {
+    let name = format!("{}Builder", struct_name);
+    Ident::new(&name, struct_name.span())
+}
+
 /// Create type alias name (e.g., "Config" + "Complete" -> "ConfigComplete")
 fn create_type_alias_name(struct_name: &Ident, suffix: &str) -> Ident {
     let name = format!("{}{}", struct_name, suffix);
     Ident::new(&name, struct_name.span())
 }
 
-/// Generate the generic struct definition
-fn generate_generic_struct(struct_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
+/// Generate the builder struct definition
+fn generate_builder_struct(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
     let type_params: Vec<_> = fields
         .iter()
         .map(|f| field_name_to_type_param(f.ident.as_ref().unwrap()))
@@ -90,24 +101,18 @@ fn generate_generic_struct(struct_name: &Ident, fields: &[Field]) -> proc_macro2
         .collect();
 
     quote! {
-        struct #struct_name<#(#type_params),*> {
+        struct #builder_name<#(#type_params),*> {
             #(#field_defs),*
         }
     }
 }
 
-/// Generate type aliases (Complete and conditionally Incomplete)
-fn generate_type_aliases(struct_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
-    let type_params_complete: Vec<_> = fields
-        .iter()
-        .map(|f| &f.ty)
-        .collect();
-
-    let complete_name = create_type_alias_name(struct_name, "Complete");
-    let complete_alias = quote! {
-        pub type #complete_name = #struct_name<#(#type_params_complete),*>;
-    };
-
+/// Generate type aliases (conditionally Incomplete only)
+fn generate_type_aliases(
+    struct_name: &Ident,
+    builder_name: &Ident,
+    fields: &[Field],
+) -> proc_macro2::TokenStream {
     // Only generate incomplete if there are #[incomplete] markers
     if has_any_incomplete_fields(fields) {
         let type_params_incomplete: Vec<_> = fields
@@ -123,21 +128,16 @@ fn generate_type_aliases(struct_name: &Ident, fields: &[Field]) -> proc_macro2::
             .collect();
 
         let incomplete_name = create_type_alias_name(struct_name, "Incomplete");
-        let incomplete_alias = quote! {
-            pub type #incomplete_name = #struct_name<#(#type_params_incomplete),*>;
-        };
-
         quote! {
-            #complete_alias
-            #incomplete_alias
+            pub type #incomplete_name = #builder_name<#(#type_params_incomplete),*>;
         }
     } else {
-        complete_alias
+        quote! {}
     }
 }
 
 /// Generate the new() constructor
-fn generate_constructor(struct_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
+fn generate_constructor(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
     let type_params: Vec<_> = fields
         .iter()
         .map(|_| quote! { () })
@@ -152,7 +152,7 @@ fn generate_constructor(struct_name: &Ident, fields: &[Field]) -> proc_macro2::T
         .collect();
 
     quote! {
-        impl #struct_name<#(#type_params),*> {
+        impl #builder_name<#(#type_params),*> {
             pub fn new() -> Self {
                 Self {
                     #(#field_inits),*
@@ -163,7 +163,7 @@ fn generate_constructor(struct_name: &Ident, fields: &[Field]) -> proc_macro2::T
 }
 
 /// Generate builder methods for each field
-fn generate_builder_methods(struct_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
+fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
     let type_params: Vec<_> = fields
         .iter()
         .map(|f| field_name_to_type_param(f.ident.as_ref().unwrap()))
@@ -205,8 +205,8 @@ fn generate_builder_methods(struct_name: &Ident, fields: &[Field]) -> proc_macro
                 .collect();
 
             quote! {
-                pub fn #method_name(self, #field_name: #field_type) -> #struct_name<#(#return_type_params),*> {
-                    #struct_name {
+                pub fn #method_name(self, #field_name: #field_type) -> #builder_name<#(#return_type_params),*> {
+                    #builder_name {
                         #(#field_assignments),*
                     }
                 }
@@ -215,8 +215,28 @@ fn generate_builder_methods(struct_name: &Ident, fields: &[Field]) -> proc_macro
         .collect();
 
     quote! {
-        impl<#(#type_params),*> #struct_name<#(#type_params),*> {
+        impl<#(#type_params),*> #builder_name<#(#type_params),*> {
             #(#methods)*
+        }
+    }
+}
+
+/// Generate build() method for fully concrete builder
+fn generate_build_method(
+    struct_name: &Ident,
+    builder_name: &Ident,
+    fields: &[Field],
+) -> proc_macro2::TokenStream {
+    let concrete_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
+    let field_names: Vec<_> = fields.iter().map(|f| &f.ident).collect();
+
+    quote! {
+        impl #builder_name<#(#concrete_types),*> {
+            pub fn build(self) -> #struct_name {
+                #struct_name {
+                    #(#field_names: self.#field_names),*
+                }
+            }
         }
     }
 }

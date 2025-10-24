@@ -1,5 +1,5 @@
-// Test: Dynamic naming - type aliases should match struct name
-// Tests that Foo generates FooComplete/FooIncomplete, not ConfigComplete/ConfigIncomplete
+// Test: Dynamic naming - builders and type aliases should match struct name
+// Tests that Foo generates FooBuilder/FooIncomplete, not ConfigBuilder/ConfigIncomplete
 
 use claude_rust_config_macro::Config;
 
@@ -26,61 +26,67 @@ struct MyCustomStruct {
 
 #[test]
 fn test_server_settings_naming() {
-    // Should generate ServerSettingsComplete and ServerSettingsIncomplete
-    let complete: ServerSettingsComplete = ServerSettings::new()
+    // Should generate ServerSettingsBuilder and ServerSettingsIncomplete
+    let complete: ServerSettings = ServerSettingsBuilder::new()
         .with_address("0.0.0.0:8080".to_string())
-        .with_tls_cert("/path/to/cert".to_string());
+        .with_tls_cert("/path/to/cert".to_string())
+        .build();
 
-    let incomplete: ServerSettingsIncomplete = ServerSettings::new()
+    let incomplete: ServerSettingsIncomplete = ServerSettingsBuilder::new()
         .with_address("0.0.0.0:8080".to_string());
 
-    let _: ServerSettingsComplete = complete;
+    let _: ServerSettings = complete;
     let _: ServerSettingsIncomplete = incomplete;
 }
 
 #[test]
 fn test_app_options_naming() {
-    // Should generate AppOptionsComplete only (no incomplete markers)
-    let complete: AppOptionsComplete = AppOptions::new()
+    // Should generate AppOptionsBuilder (no incomplete type alias since no markers)
+    let complete: AppOptions = AppOptionsBuilder::new()
         .with_debug(true)
-        .with_log_level("info".to_string());
+        .with_log_level("info".to_string())
+        .build();
 
-    let _: AppOptionsComplete = complete;
+    let _: AppOptions = complete;
 }
 
 #[test]
 fn test_my_custom_struct_naming() {
-    // Should generate MyCustomStructComplete and MyCustomStructIncomplete
-    let complete: MyCustomStructComplete = MyCustomStruct::new()
+    // Should generate MyCustomStructBuilder and MyCustomStructIncomplete
+    let complete: MyCustomStruct = MyCustomStructBuilder::new()
         .with_field1("value".to_string())
         .with_field2(42)
-        .with_field3(true);
+        .with_field3(true)
+        .build();
 
-    let incomplete: MyCustomStructIncomplete = MyCustomStruct::new()
+    let incomplete: MyCustomStructIncomplete = MyCustomStructBuilder::new()
         .with_field1("value".to_string())
         .with_field2(42);
 
-    let _: MyCustomStructComplete = complete;
+    let _: MyCustomStruct = complete;
     let _: MyCustomStructIncomplete = incomplete;
 }
 
 #[test]
 fn test_different_structs_dont_conflict() {
-    // Verify that different structs generate different type aliases
-    let server: ServerSettingsComplete = ServerSettings::new()
+    // Verify that different structs generate different builders
+    let server: ServerSettings = ServerSettingsBuilder::new()
         .with_address("0.0.0.0:8080".to_string())
-        .with_tls_cert("/path/to/cert".to_string());
+        .with_tls_cert("/path/to/cert".to_string())
+        .build();
 
-    let app: AppOptionsComplete = AppOptions::new()
+    let app: AppOptions = AppOptionsBuilder::new()
         .with_debug(false)
-        .with_log_level("debug".to_string());
+        .with_log_level("debug".to_string())
+        .build();
 
-    let custom: MyCustomStructComplete = MyCustomStruct::new()
+    let custom: MyCustomStruct = MyCustomStructBuilder::new()
         .with_field1("test".to_string())
         .with_field2(100)
-        .with_field3(false);
+        .with_field3(false)
+        .build();
 
-    let _: ServerSettingsComplete = server;
-    let _: AppOptionsComplete = app;
-    let _: MyCustomStructComplete = custom;
+    let _: ServerSettings = server;
+    let _: AppOptions = app;
+    let _: MyCustomStruct = custom;
 }
