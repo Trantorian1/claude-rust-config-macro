@@ -76,9 +76,12 @@ fn has_default_attr(field: &Field) -> bool {
     extract_default_value(field).is_some()
 }
 
-/// Check if any field has the #[incomplete] attribute
+/// Check if any field has the #[incomplete] attribute (excluding default fields)
 fn has_any_incomplete_fields(fields: &[Field]) -> bool {
-    fields.iter().any(has_incomplete_attr)
+    fields.iter().any(|f| {
+        // Only count as incomplete if it has #[incomplete] but NOT #[default]
+        has_incomplete_attr(f) && !has_default_attr(f)
+    })
 }
 
 // ============================================================================
