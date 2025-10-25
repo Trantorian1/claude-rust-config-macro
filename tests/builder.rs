@@ -344,3 +344,271 @@ fn test_wrapper_with_incomplete() {
 
     assert_eq!(complete.id, "worker-1");
 }
+
+// ============================================================================
+// Test 11: Basic default field
+// ============================================================================
+
+#[derive(Builder)]
+struct WebServerConfig {
+    host: String,
+    port: u16,
+    #[default(4)]
+    workers: usize,
+}
+
+#[test]
+fn test_basic_default_field() {
+    // Can build without setting default field
+    let config = WebServerConfigBuilder::new()
+        .with_host("localhost".to_string())
+        .with_port(8080)
+        .build();
+
+    assert_eq!(config.host, "localhost");
+    assert_eq!(config.port, 8080);
+    assert_eq!(config.workers, 4); // Uses default value
+}
+
+#[test]
+fn test_override_default_field() {
+    // Can override default value with mutable consuming setter
+    let config = WebServerConfigBuilder::new()
+        .with_host("localhost".to_string())
+        .with_port(8080)
+        .with_workers(8) // Override default
+        .build();
+
+    assert_eq!(config.workers, 8);
+}
+
+#[test]
+fn test_default_field_chaining() {
+    // Mutable consuming pattern allows chaining
+    let config = WebServerConfigBuilder::new()
+        .with_host("localhost".to_string())
+        .with_workers(16) // Can set before or after required fields
+        .with_port(8080)
+        .build();
+
+    assert_eq!(config.workers, 16);
+}
+
+// ============================================================================
+// Test 12: Multiple default fields
+// ============================================================================
+
+#[derive(Builder)]
+struct ApiConfig {
+    endpoint: String,
+    #[default(30)]
+    timeout: u64,
+    #[default(3)]
+    retries: u32,
+    #[default(true)]
+    use_tls: bool,
+}
+
+#[test]
+fn test_multiple_defaults() {
+    // Can build with only required field
+    let config = ApiConfigBuilder::new()
+        .with_endpoint("https://api.example.com".to_string())
+        .build();
+
+    assert_eq!(config.endpoint, "https://api.example.com");
+    assert_eq!(config.timeout, 30);
+    assert_eq!(config.retries, 3);
+    assert_eq!(config.use_tls, true);
+}
+
+#[test]
+fn test_partial_override_defaults() {
+    // Can override some defaults while keeping others
+    let config = ApiConfigBuilder::new()
+        .with_endpoint("https://api.example.com".to_string())
+        .with_timeout(60) // Override this one
+        .with_retries(5)  // And this one
+        .build();
+
+    assert_eq!(config.timeout, 60);
+    assert_eq!(config.retries, 5);
+    assert_eq!(config.use_tls, true); // Keeps default
+}
+
+#[test]
+fn test_multiple_overrides_order() {
+    // Can override in any order
+    let config = ApiConfigBuilder::new()
+        .with_timeout(45)
+        .with_endpoint("https://api.example.com".to_string())
+        .with_use_tls(false)
+        .build();
+
+    assert_eq!(config.timeout, 45);
+    assert_eq!(config.use_tls, false);
+}
+
+// ============================================================================
+// Test 13: Default with complex types
+// ============================================================================
+
+#[derive(Builder)]
+struct StorageConfig {
+    path: String,
+    #[default(vec![])]
+    exclude_patterns: Vec<String>,
+    #[default(None)]
+    cache_dir: Option<String>,
+}
+
+#[test]
+fn test_default_complex_types() {
+    let config = StorageConfigBuilder::new()
+        .with_path("/data".to_string())
+        .build();
+
+    assert_eq!(config.path, "/data");
+    assert!(config.exclude_patterns.is_empty());
+    assert!(config.cache_dir.is_none());
+}
+
+#[test]
+fn test_override_default_complex_types() {
+    let config = StorageConfigBuilder::new()
+        .with_path("/data".to_string())
+        .with_exclude_patterns(vec!["*.tmp".to_string(), "*.log".to_string()])
+        .with_cache_dir(Some("/cache".to_string()))
+        .build();
+
+    assert_eq!(config.exclude_patterns.len(), 2);
+    assert_eq!(config.cache_dir, Some("/cache".to_string()));
+}
+
+// ============================================================================
+// Test 14: Default with Arc smart wrapping
+// ============================================================================
+
+trait FormatterTrait {
+    fn format(&self, text: &str) -> String;
+}
+
+struct JsonFormatter;
+
+impl FormatterTrait for JsonFormatter {
+    fn format(&self, text: &str) -> String {
+        format!(r#"{{"text": "{}"}}"#, text)
+    }
+}
+
+struct DefaultFormatter;
+
+impl FormatterTrait for DefaultFormatter {
+    fn format(&self, text: &str) -> String {
+        text.to_string()
+    }
+}
+
+#[derive(Builder)]
+struct OutputConfig {
+    destination: String,
+    #[default(Arc::new(DefaultFormatter))]
+    formatter: Arc<dyn FormatterTrait>,
+}
+
+#[test]
+fn test_default_arc_wrapper() {
+    let config = OutputConfigBuilder::new()
+        .with_destination("stdout".to_string())
+        .build();
+
+    assert_eq!(config.destination, "stdout");
+    assert_eq!(config.formatter.format("test"), "test");
+}
+
+#[test]
+fn test_override_default_arc_wrapper() {
+    // Override default formatter with smart wrapping
+    let config = OutputConfigBuilder::new()
+        .with_destination("stdout".to_string())
+        .with_formatter(JsonFormatter)
+        .build();
+
+    assert_eq!(config.formatter.format("test"), r#"{"text": "test"}"#);
+}
+
+// ============================================================================
+// Test 15: Default field with #[incomplete] marker (default takes precedence)
+// ============================================================================
+
+#[derive(Builder)]
+struct SecurityConfig {
+    #[incomplete]
+    api_key: String,
+    #[default("info")]
+    log_level: &'static str,
+    #[default(true)]
+    #[incomplete] // This should be ignored since #[default] takes precedence
+    verify_ssl: bool,
+}
+
+#[test]
+fn test_default_overrides_incomplete() {
+    // Can build without setting verify_ssl (default takes precedence)
+    let config = SecurityConfigBuilder::new()
+        .with_api_key("key123".to_string())
+        .build();
+
+    assert_eq!(config.api_key, "key123");
+    assert_eq!(config.log_level, "info");
+    assert_eq!(config.verify_ssl, true); // Uses default, not incomplete
+}
+
+#[test]
+fn test_incomplete_still_works_for_non_default() {
+    // Can create incomplete without api_key
+    let _incomplete: SecurityConfigIncomplete = SecurityConfigBuilder::new();
+
+    // Must provide api_key to build
+    let complete = SecurityConfigBuilder::new()
+        .with_api_key("key123".to_string())
+        .build();
+
+    assert_eq!(complete.api_key, "key123");
+}
+
+// ============================================================================
+// Test 16: All default fields
+// ============================================================================
+
+#[derive(Builder)]
+struct ThemeConfig {
+    #[default("dark")]
+    mode: &'static str,
+    #[default(14)]
+    font_size: u8,
+    #[default(true)]
+    syntax_highlighting: bool,
+}
+
+#[test]
+fn test_all_default_fields() {
+    // Can build without setting any fields
+    let config = ThemeConfigBuilder::new().build();
+
+    assert_eq!(config.mode, "dark");
+    assert_eq!(config.font_size, 14);
+    assert_eq!(config.syntax_highlighting, true);
+}
+
+#[test]
+fn test_all_defaults_with_overrides() {
+    let config = ThemeConfigBuilder::new()
+        .with_mode("light")
+        .with_font_size(16)
+        .build();
+
+    assert_eq!(config.mode, "light");
+    assert_eq!(config.font_size, 16);
+    assert_eq!(config.syntax_highlighting, true); // Keeps default
+}

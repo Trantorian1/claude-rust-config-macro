@@ -1,11 +1,11 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, DeriveInput, Data, Fields, Field, Ident, Type,
+    parse_macro_input, DeriveInput, Data, Fields, Field, Ident, Type, Expr,
     GenericArgument, PathArguments, TypeParamBound, TypeTraitObject,
 };
 
-#[proc_macro_derive(Builder, attributes(incomplete))]
+#[proc_macro_derive(Builder, attributes(incomplete, default))]
 pub fn derive_builder(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
@@ -59,9 +59,79 @@ fn has_incomplete_attr(field: &Field) -> bool {
     field.attrs.iter().any(|attr| attr.path().is_ident("incomplete"))
 }
 
+/// Extract default value from #[default(...)] attribute
+fn extract_default_value(field: &Field) -> Option<Expr> {
+    for attr in &field.attrs {
+        if attr.path().is_ident("default") {
+            if let Ok(expr) = attr.parse_args::<Expr>() {
+                return Some(expr);
+            }
+        }
+    }
+    None
+}
+
+/// Check if a field has a #[default(...)] attribute
+fn has_default_attr(field: &Field) -> bool {
+    extract_default_value(field).is_some()
+}
+
 /// Check if any field has the #[incomplete] attribute
 fn has_any_incomplete_fields(fields: &[Field]) -> bool {
     fields.iter().any(has_incomplete_attr)
+}
+
+// ============================================================================
+// Field Categorization
+// ============================================================================
+
+/// Categories for fields based on their attributes
+enum FieldCategory {
+    Default {
+        value: Expr,  // The default value expression
+        ty: Type,     // The concrete type
+    },
+    Regular {
+        ty: Type,     // The type (may need smart wrapping)
+    },
+}
+
+/// A categorized field with its name, category, and wrapper type
+struct CategorizedField {
+    name: Ident,
+    category: FieldCategory,
+    wrapper: WrapperType,
+    has_incomplete: bool,  // Track if field has #[incomplete] attribute
+}
+
+/// Categorize a field as either default or regular
+fn categorize_field(field: &Field) -> CategorizedField {
+    let name = field.ident.as_ref().unwrap().clone();
+    let ty = field.ty.clone();
+    let wrapper = analyze_field_type(&ty);
+    let has_incomplete = has_incomplete_attr(field);
+
+    // #[default] takes precedence over #[incomplete]
+    if let Some(default_value) = extract_default_value(field) {
+        CategorizedField {
+            name,
+            category: FieldCategory::Default { value: default_value, ty },
+            wrapper,
+            has_incomplete: false,  // Default fields ignore #[incomplete]
+        }
+    } else {
+        CategorizedField {
+            name,
+            category: FieldCategory::Regular { ty },
+            wrapper,
+            has_incomplete,
+        }
+    }
+}
+
+/// Categorize all fields
+fn categorize_fields(fields: &[Field]) -> Vec<CategorizedField> {
+    fields.iter().map(categorize_field).collect()
 }
 
 /// Convert field name to PascalCase type parameter
@@ -165,17 +235,32 @@ fn analyze_field_type(ty: &Type) -> WrapperType {
 
 /// Generate the builder struct definition
 fn generate_builder_struct(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
-    let type_params: Vec<_> = fields
+    let categorized = categorize_fields(fields);
+
+    // Only non-default fields get generic parameters
+    let type_params: Vec<_> = categorized
         .iter()
-        .map(|f| field_name_to_type_param(f.ident.as_ref().unwrap()))
+        .filter_map(|f| match &f.category {
+            FieldCategory::Regular { .. } => Some(field_name_to_type_param(&f.name)),
+            FieldCategory::Default { .. } => None,
+        })
         .collect();
 
-    let field_defs: Vec<_> = fields
+    let field_defs: Vec<_> = categorized
         .iter()
-        .zip(&type_params)
-        .map(|(field, type_param)| {
-            let field_name = &field.ident;
-            quote! { #field_name: #type_param }
+        .map(|f| {
+            let field_name = &f.name;
+            match &f.category {
+                FieldCategory::Default { ty, .. } => {
+                    // Default fields have concrete types
+                    quote! { #field_name: #ty }
+                }
+                FieldCategory::Regular { .. } => {
+                    // Regular fields are generic
+                    let type_param = field_name_to_type_param(field_name);
+                    quote! { #field_name: #type_param }
+                }
+            }
         })
         .collect();
 
@@ -194,15 +279,20 @@ fn generate_type_aliases(
 ) -> proc_macro2::TokenStream {
     // Only generate incomplete if there are #[incomplete] markers
     if has_any_incomplete_fields(fields) {
-        let type_params_incomplete: Vec<_> = fields
+        let categorized = categorize_fields(fields);
+
+        // Only include regular fields in type parameters (default fields are concrete)
+        let type_params_incomplete: Vec<_> = categorized
             .iter()
-            .map(|f| {
-                if has_incomplete_attr(f) {
-                    quote! { () }
-                } else {
-                    let ty = &f.ty;
-                    quote! { #ty }
+            .filter_map(|f| match &f.category {
+                FieldCategory::Regular { ty } => {
+                    if f.has_incomplete {
+                        Some(quote! { () })
+                    } else {
+                        Some(quote! { #ty })
+                    }
                 }
+                FieldCategory::Default { .. } => None,
             })
             .collect();
 
@@ -217,16 +307,31 @@ fn generate_type_aliases(
 
 /// Generate the new() constructor
 fn generate_constructor(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
-    let type_params: Vec<_> = fields
+    let categorized = categorize_fields(fields);
+
+    // Only regular fields get () type parameters
+    let type_params: Vec<_> = categorized
         .iter()
-        .map(|_| quote! { () })
+        .filter_map(|f| match &f.category {
+            FieldCategory::Regular { .. } => Some(quote! { () }),
+            FieldCategory::Default { .. } => None,
+        })
         .collect();
 
-    let field_inits: Vec<_> = fields
+    let field_inits: Vec<_> = categorized
         .iter()
         .map(|f| {
-            let field_name = &f.ident;
-            quote! { #field_name: () }
+            let field_name = &f.name;
+            match &f.category {
+                FieldCategory::Default { value, .. } => {
+                    // Initialize with default value
+                    quote! { #field_name: #value }
+                }
+                FieldCategory::Regular { .. } => {
+                    // Initialize with ()
+                    quote! { #field_name: () }
+                }
+            }
         })
         .collect();
 
@@ -243,28 +348,53 @@ fn generate_constructor(builder_name: &Ident, fields: &[Field]) -> proc_macro2::
 
 /// Generate builder methods for each field
 fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
-    let type_params: Vec<_> = fields
+    let categorized = categorize_fields(fields);
+
+    // Generate type parameters (only for regular fields)
+    let type_params: Vec<_> = categorized
         .iter()
-        .map(|f| field_name_to_type_param(f.ident.as_ref().unwrap()))
+        .filter_map(|f| match &f.category {
+            FieldCategory::Regular { .. } => Some(field_name_to_type_param(&f.name)),
+            FieldCategory::Default { .. } => None,
+        })
         .collect();
 
-    let methods: Vec<_> = fields
+    // Split categorized fields into regular and default
+    let regular_fields: Vec<_> = categorized
         .iter()
         .enumerate()
-        .map(|(idx, field)| {
-            let field_name = field.ident.as_ref().unwrap();
-            let field_type = &field.ty;
-            let method_name = Ident::new(&format!("with_{}", field_name), field_name.span());
+        .filter_map(|(idx, f)| match &f.category {
+            FieldCategory::Regular { .. } => Some((idx, f)),
+            FieldCategory::Default { .. } => None,
+        })
+        .collect();
 
-            // Analyze field type for smart wrapping
-            let wrapper_type = analyze_field_type(field_type);
+    let default_fields: Vec<_> = categorized
+        .iter()
+        .filter_map(|f| match &f.category {
+            FieldCategory::Default { .. } => Some(f),
+            _ => None,
+        })
+        .collect();
+
+    // Generate methods for regular fields (typestate pattern)
+    let regular_methods: Vec<_> = regular_fields
+        .iter()
+        .enumerate()
+        .map(|(regular_idx, (_, catfield))| {
+            let field_name = &catfield.name;
+            let field_type = match &catfield.category {
+                FieldCategory::Regular { ty } => ty,
+                _ => unreachable!(),
+            };
+            let method_name = Ident::new(&format!("with_{}", field_name), field_name.span());
 
             // Create return type parameters (replace the current field's generic with concrete type)
             let return_type_params: Vec<_> = type_params
                 .iter()
                 .enumerate()
                 .map(|(i, param)| {
-                    if i == idx {
+                    if i == regular_idx {
                         quote! { #field_type }
                     } else {
                         quote! { #param }
@@ -272,23 +402,19 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macr
                 })
                 .collect();
 
-            // Create field assignments for other fields (not current)
-            let other_field_assignments: Vec<_> = fields
+            // Create field assignments for all other fields (regular and default)
+            let other_field_assignments: Vec<_> = categorized
                 .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != idx)
-                .map(|(_, f)| {
-                    let fname = f.ident.as_ref().unwrap();
+                .filter(|f| f.name != *field_name)
+                .map(|f| {
+                    let fname = &f.name;
                     quote! { #fname: self.#fname }
                 })
                 .collect();
 
-            match wrapper_type {
+            match &catfield.wrapper {
                 WrapperType::Arc(bounds) => {
-                    // Check if bounds already contain a lifetime
                     let has_lifetime = bounds.iter().any(|b| matches!(b, TypeParamBound::Lifetime(_)));
-
-                    // Generate trait bounds with + 'static if no explicit lifetime
                     let trait_bounds = if has_lifetime {
                         quote! { #(#bounds)+* }
                     } else {
@@ -309,10 +435,7 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macr
                 }
 
                 WrapperType::Box(bounds) => {
-                    // Check if bounds already contain a lifetime
                     let has_lifetime = bounds.iter().any(|b| matches!(b, TypeParamBound::Lifetime(_)));
-
-                    // Generate trait bounds with + 'static if no explicit lifetime
                     let trait_bounds = if has_lifetime {
                         quote! { #(#bounds)+* }
                     } else {
@@ -333,7 +456,6 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macr
                 }
 
                 WrapperType::None => {
-                    // Original behavior - no wrapping
                     quote! {
                         pub fn #method_name(self, #field_name: #field_type) -> #builder_name<#(#return_type_params),*> {
                             #builder_name {
@@ -347,9 +469,72 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macr
         })
         .collect();
 
+    // Generate mutable consuming setters for default fields
+    let default_methods: Vec<_> = default_fields
+        .iter()
+        .map(|catfield| {
+            let field_name = &catfield.name;
+            let field_type = match &catfield.category {
+                FieldCategory::Default { ty, .. } => ty,
+                _ => unreachable!(),
+            };
+            let method_name = Ident::new(&format!("with_{}", field_name), field_name.span());
+
+            match &catfield.wrapper {
+                WrapperType::Arc(bounds) => {
+                    let has_lifetime = bounds.iter().any(|b| matches!(b, TypeParamBound::Lifetime(_)));
+                    let trait_bounds = if has_lifetime {
+                        quote! { #(#bounds)+* }
+                    } else {
+                        quote! { #(#bounds)+* + 'static }
+                    };
+
+                    quote! {
+                        pub fn #method_name(
+                            mut self,
+                            #field_name: impl #trait_bounds
+                        ) -> Self {
+                            self.#field_name = std::sync::Arc::new(#field_name);
+                            self
+                        }
+                    }
+                }
+
+                WrapperType::Box(bounds) => {
+                    let has_lifetime = bounds.iter().any(|b| matches!(b, TypeParamBound::Lifetime(_)));
+                    let trait_bounds = if has_lifetime {
+                        quote! { #(#bounds)+* }
+                    } else {
+                        quote! { #(#bounds)+* + 'static }
+                    };
+
+                    quote! {
+                        pub fn #method_name(
+                            mut self,
+                            #field_name: impl #trait_bounds
+                        ) -> Self {
+                            self.#field_name = Box::new(#field_name);
+                            self
+                        }
+                    }
+                }
+
+                WrapperType::None => {
+                    quote! {
+                        pub fn #method_name(mut self, #field_name: #field_type) -> Self {
+                            self.#field_name = #field_name;
+                            self
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
     quote! {
         impl<#(#type_params),*> #builder_name<#(#type_params),*> {
-            #(#methods)*
+            #(#regular_methods)*
+            #(#default_methods)*
         }
     }
 }
@@ -360,8 +545,19 @@ fn generate_build_method(
     builder_name: &Ident,
     fields: &[Field],
 ) -> proc_macro2::TokenStream {
-    let concrete_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
-    let field_names: Vec<_> = fields.iter().map(|f| &f.ident).collect();
+    let categorized = categorize_fields(fields);
+
+    // Only regular fields are type parameters (default fields are already concrete)
+    let concrete_types: Vec<_> = categorized
+        .iter()
+        .filter_map(|f| match &f.category {
+            FieldCategory::Regular { ty } => Some(ty),
+            FieldCategory::Default { .. } => None,
+        })
+        .collect();
+
+    // All fields are included in the final struct
+    let field_names: Vec<_> = categorized.iter().map(|f| &f.name).collect();
 
     quote! {
         impl #builder_name<#(#concrete_types),*> {

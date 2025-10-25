@@ -7,6 +7,7 @@ A Rust procedural macro that generates type-safe builder patterns using the type
 - **Type-Safe Builders**: Generate builder structs with progressive type state
 - **Compile-Time Validation**: Ensure all fields are set before calling `build()`
 - **Optional Fields**: Mark fields as `#[incomplete]` to create partial configurations
+- **Default Values**: Use `#[default(...)]` to provide default field values
 - **Smart Wrapping**: Automatic `Arc<dyn Trait>` and `Box<dyn Trait>` wrapping
 - **Zero Boilerplate**: Automatic builder generation from struct definitions
 - **No Name Conflicts**: Generated builders don't interfere with original structs
@@ -73,6 +74,49 @@ fn main() {
 }
 ```
 
+### Default Fields
+
+Provide default values for fields using the `#[default(...)]` attribute. Default fields don't participate in typestate progression and can be optionally overridden:
+
+```rust
+#[derive(Builder)]
+struct WebServerConfig {
+    host: String,
+    port: u16,
+    #[default(4)]
+    workers: usize,
+    #[default(30)]
+    timeout: u64,
+}
+
+fn main() {
+    // Build without setting default fields - they use their default values
+    let config1 = WebServerConfigBuilder::new()
+        .with_host("localhost".to_string())
+        .with_port(8080)
+        .build();
+
+    assert_eq!(config1.workers, 4);
+    assert_eq!(config1.timeout, 30);
+
+    // Override default values if needed
+    let config2 = WebServerConfigBuilder::new()
+        .with_host("localhost".to_string())
+        .with_port(8080)
+        .with_workers(8)  // Override default
+        .build();
+
+    assert_eq!(config2.workers, 8);
+}
+```
+
+**Key behaviors:**
+- Default fields are initialized with their default values in `new()`
+- Setters for default fields use mutable consuming pattern (`mut self -> Self`)
+- Default fields can be set in any order and are always optional
+- Works with complex types: `#[default(vec![])]`, `#[default(None)]`, `#[default(Arc::new(...))]`
+- When both `#[default(...)]` and `#[incomplete]` are present, `#[default]` takes precedence
+
 ### Smart Wrapping for Trait Objects
 
 The builder automatically wraps trait objects in `Arc` or `Box`, eliminating boilerplate:
@@ -124,10 +168,12 @@ fn main() {
 
 For each struct annotated with `#[derive(Builder)]`, the macro generates:
 
-1. **Builder Struct**: `{StructName}Builder<T1, T2, ...>` with generic type parameters
-2. **Constructor**: `new()` method returning builder with all fields as `()`
-3. **Setter Methods**: `with_{field}()` methods that progressively set fields
-4. **Build Method**: `build()` method available only when all fields are concrete types
+1. **Builder Struct**: `{StructName}Builder<T1, T2, ...>` with generic type parameters (only for required fields)
+2. **Constructor**: `new()` method returning builder with required fields as `()` and default fields initialized
+3. **Setter Methods**:
+   - Required fields: `with_{field}()` methods that progressively set fields (consuming `self`)
+   - Default fields: `with_{field}()` methods that override defaults (mutable consuming `mut self`)
+4. **Build Method**: `build()` method available only when all required fields are set
 5. **Incomplete Type Alias**: (Optional) `{StructName}Incomplete` when `#[incomplete]` markers exist
 
 ### Generated Code Example
