@@ -212,11 +212,8 @@ fn is_arc_dyn_trait(ty: &Type) -> Option<Vec<TypeParamBound>> {
 
         // Get generic arguments
         if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
-            if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                // Check if inner type is TraitObject (has dyn keyword)
-                if let Type::TraitObject(trait_obj) = inner_ty {
-                    return Some(trait_obj.bounds.iter().cloned().collect());
-                }
+            if let Some(GenericArgument::Type(Type::TraitObject(trait_obj))) = args.args.first() {
+                return Some(trait_obj.bounds.iter().cloned().collect());
             }
         }
     }
@@ -236,11 +233,8 @@ fn is_box_dyn_trait(ty: &Type) -> Option<Vec<TypeParamBound>> {
 
         // Get generic arguments
         if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
-            if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
-                // Check if inner type is TraitObject (has dyn keyword)
-                if let Type::TraitObject(trait_obj) = inner_ty {
-                    return Some(trait_obj.bounds.iter().cloned().collect());
-                }
+            if let Some(GenericArgument::Type(Type::TraitObject(trait_obj))) = args.args.first() {
+                return Some(trait_obj.bounds.iter().cloned().collect());
             }
         }
     }
@@ -403,10 +397,7 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> syn::Resu
 
     let default_fields: Vec<_> = categorized
         .iter()
-        .filter_map(|f| match &f.category {
-            FieldCategory::Default { .. } => Some(f),
-            _ => None,
-        })
+        .filter(|f| matches!(&f.category, FieldCategory::Default { .. }))
         .collect();
 
     // Generate methods for regular fields (typestate pattern)

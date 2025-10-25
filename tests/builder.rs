@@ -282,7 +282,7 @@ impl HandlerTrait for EchoHandler {
 #[derive(Builder)]
 struct Server {
     port: u16,
-    handler: Arc<dyn HandlerTrait + Send + Sync>,
+    handler: Arc<dyn HandlerTrait>,
 }
 
 #[test]
@@ -426,7 +426,7 @@ fn test_multiple_defaults() {
     assert_eq!(config.endpoint, "https://api.example.com");
     assert_eq!(config.timeout, 30);
     assert_eq!(config.retries, 3);
-    assert_eq!(config.use_tls, true);
+    assert!(config.use_tls);
 }
 
 #[test]
@@ -440,7 +440,7 @@ fn test_partial_override_defaults() {
 
     assert_eq!(config.timeout, 60);
     assert_eq!(config.retries, 5);
-    assert_eq!(config.use_tls, true); // Keeps default
+    assert!(config.use_tls); // Keeps default
 }
 
 #[test]
@@ -453,7 +453,7 @@ fn test_multiple_overrides_order() {
         .build();
 
     assert_eq!(config.timeout, 45);
-    assert_eq!(config.use_tls, false);
+    assert!(!config.use_tls);
 }
 
 // ============================================================================
@@ -567,7 +567,7 @@ fn test_default_with_incomplete_fields() {
 
     assert_eq!(config.api_key, "key123");
     assert_eq!(config.log_level, "info");
-    assert_eq!(config.verify_ssl, true);
+    assert!(config.verify_ssl);
 }
 
 #[test]
@@ -594,7 +594,7 @@ fn test_override_defaults_with_incomplete() {
 
     assert_eq!(config.api_key, "key123");
     assert_eq!(config.log_level, "debug");
-    assert_eq!(config.verify_ssl, false);
+    assert!(!config.verify_ssl);
 }
 
 // ============================================================================
@@ -618,7 +618,7 @@ fn test_all_default_fields() {
 
     assert_eq!(config.mode, "dark");
     assert_eq!(config.font_size, 14);
-    assert_eq!(config.syntax_highlighting, true);
+    assert!(config.syntax_highlighting);
 }
 
 #[test]
@@ -630,5 +630,5 @@ fn test_all_defaults_with_overrides() {
 
     assert_eq!(config.mode, "light");
     assert_eq!(config.font_size, 16);
-    assert_eq!(config.syntax_highlighting, true); // Keeps default
+    assert!(config.syntax_highlighting); // Keeps default
 }
