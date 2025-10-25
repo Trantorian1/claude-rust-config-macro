@@ -1,6 +1,9 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, DeriveInput, Data, Fields, Field, Ident};
+use syn::{
+    parse_macro_input, DeriveInput, Data, Fields, Field, Ident, Type,
+    GenericArgument, PathArguments, TypeParamBound, TypeTraitObject,
+};
 
 #[proc_macro_derive(Builder, attributes(incomplete))]
 pub fn derive_builder(input: TokenStream) -> TokenStream {
@@ -83,6 +86,82 @@ fn create_type_alias_name(struct_name: &Ident, suffix: &str) -> Ident {
     let name = format!("{}{}", struct_name, suffix);
     Ident::new(&name, struct_name.span())
 }
+
+// ============================================================================
+// Type Analysis for Smart Wrappers
+// ============================================================================
+
+/// Represents different wrapper types for fields
+enum WrapperType {
+    None,  // Regular field, no wrapping
+    Arc(Vec<TypeParamBound>),  // Arc<dyn Trait> - bounds are the trait bounds
+    Box(Vec<TypeParamBound>),  // Box<dyn Trait> - bounds are the trait bounds
+}
+
+/// Check if a type is Arc<dyn Trait> and extract the trait bounds
+fn is_arc_dyn_trait(ty: &Type) -> Option<Vec<TypeParamBound>> {
+    if let Type::Path(type_path) = ty {
+        // Check if the path has segments and the last one is "Arc"
+        let last_segment = type_path.path.segments.last()?;
+
+        if last_segment.ident != "Arc" {
+            return None;
+        }
+
+        // Get generic arguments
+        if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
+            if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
+                // Check if inner type is TraitObject (has dyn keyword)
+                if let Type::TraitObject(trait_obj) = inner_ty {
+                    return Some(trait_obj.bounds.iter().cloned().collect());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Check if a type is Box<dyn Trait> and extract the trait bounds
+fn is_box_dyn_trait(ty: &Type) -> Option<Vec<TypeParamBound>> {
+    if let Type::Path(type_path) = ty {
+        // Check if the path has segments and the last one is "Box"
+        let last_segment = type_path.path.segments.last()?;
+
+        if last_segment.ident != "Box" {
+            return None;
+        }
+
+        // Get generic arguments
+        if let PathArguments::AngleBracketed(args) = &last_segment.arguments {
+            if let Some(GenericArgument::Type(inner_ty)) = args.args.first() {
+                // Check if inner type is TraitObject (has dyn keyword)
+                if let Type::TraitObject(trait_obj) = inner_ty {
+                    return Some(trait_obj.bounds.iter().cloned().collect());
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Analyze a field type to determine if it needs smart wrapping
+fn analyze_field_type(ty: &Type) -> WrapperType {
+    if let Some(bounds) = is_arc_dyn_trait(ty) {
+        return WrapperType::Arc(bounds);
+    }
+
+    if let Some(bounds) = is_box_dyn_trait(ty) {
+        return WrapperType::Box(bounds);
+    }
+
+    WrapperType::None
+}
+
+// ============================================================================
+// Code Generation Functions
+// ============================================================================
 
 /// Generate the builder struct definition
 fn generate_builder_struct(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
@@ -177,6 +256,9 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macr
             let field_type = &field.ty;
             let method_name = Ident::new(&format!("with_{}", field_name), field_name.span());
 
+            // Analyze field type for smart wrapping
+            let wrapper_type = analyze_field_type(field_type);
+
             // Create return type parameters (replace the current field's generic with concrete type)
             let return_type_params: Vec<_> = type_params
                 .iter()
@@ -190,24 +272,75 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macr
                 })
                 .collect();
 
-            // Create field assignments
-            let field_assignments: Vec<_> = fields
+            // Create field assignments for other fields (not current)
+            let other_field_assignments: Vec<_> = fields
                 .iter()
                 .enumerate()
-                .map(|(i, f)| {
+                .filter(|(i, _)| *i != idx)
+                .map(|(_, f)| {
                     let fname = f.ident.as_ref().unwrap();
-                    if i == idx {
-                        quote! { #fname: #field_name }
-                    } else {
-                        quote! { #fname: self.#fname }
-                    }
+                    quote! { #fname: self.#fname }
                 })
                 .collect();
 
-            quote! {
-                pub fn #method_name(self, #field_name: #field_type) -> #builder_name<#(#return_type_params),*> {
-                    #builder_name {
-                        #(#field_assignments),*
+            match wrapper_type {
+                WrapperType::Arc(bounds) => {
+                    // Check if bounds already contain a lifetime
+                    let has_lifetime = bounds.iter().any(|b| matches!(b, TypeParamBound::Lifetime(_)));
+
+                    // Generate trait bounds with + 'static if no explicit lifetime
+                    let trait_bounds = if has_lifetime {
+                        quote! { #(#bounds)+* }
+                    } else {
+                        quote! { #(#bounds)+* + 'static }
+                    };
+
+                    quote! {
+                        pub fn #method_name(
+                            self,
+                            #field_name: impl #trait_bounds
+                        ) -> #builder_name<#(#return_type_params),*> {
+                            #builder_name {
+                                #field_name: std::sync::Arc::new(#field_name),
+                                #(#other_field_assignments),*
+                            }
+                        }
+                    }
+                }
+
+                WrapperType::Box(bounds) => {
+                    // Check if bounds already contain a lifetime
+                    let has_lifetime = bounds.iter().any(|b| matches!(b, TypeParamBound::Lifetime(_)));
+
+                    // Generate trait bounds with + 'static if no explicit lifetime
+                    let trait_bounds = if has_lifetime {
+                        quote! { #(#bounds)+* }
+                    } else {
+                        quote! { #(#bounds)+* + 'static }
+                    };
+
+                    quote! {
+                        pub fn #method_name(
+                            self,
+                            #field_name: impl #trait_bounds
+                        ) -> #builder_name<#(#return_type_params),*> {
+                            #builder_name {
+                                #field_name: Box::new(#field_name),
+                                #(#other_field_assignments),*
+                            }
+                        }
+                    }
+                }
+
+                WrapperType::None => {
+                    // Original behavior - no wrapping
+                    quote! {
+                        pub fn #method_name(self, #field_name: #field_type) -> #builder_name<#(#return_type_params),*> {
+                            #builder_name {
+                                #field_name,
+                                #(#other_field_assignments),*
+                            }
+                        }
                     }
                 }
             }

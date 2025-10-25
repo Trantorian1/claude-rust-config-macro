@@ -183,3 +183,164 @@ fn test_complex_field_types() {
     assert_eq!(config.tags.len(), 2);
     assert!(config.redis_url.is_some());
 }
+
+// ============================================================================
+// Test 6: Smart wrapping for Arc<dyn Trait>
+// ============================================================================
+
+use std::sync::Arc;
+
+trait Logger {
+    fn log(&self, msg: &str);
+}
+
+struct ConsoleLogger {
+    prefix: String,
+}
+
+impl Logger for ConsoleLogger {
+    fn log(&self, msg: &str) {
+        println!("{}: {}", self.prefix, msg);
+    }
+}
+
+#[derive(Builder)]
+struct App {
+    name: String,
+    logger: Arc<dyn Logger>,
+}
+
+#[test]
+fn test_arc_dyn_trait_auto_wrap() {
+    // No need to manually wrap with Arc::new!
+    let app = AppBuilder::new()
+        .with_name("MyApp".to_string())
+        .with_logger(ConsoleLogger {
+            prefix: "INFO".to_string(),
+        })
+        .build();
+
+    assert_eq!(app.name, "MyApp");
+    app.logger.log("test message");
+}
+
+// ============================================================================
+// Test 7: Smart wrapping for Box<dyn Trait>
+// ============================================================================
+
+trait Processor {
+    fn process(&self, data: &str) -> String;
+}
+
+struct UpperCaseProcessor;
+
+impl Processor for UpperCaseProcessor {
+    fn process(&self, data: &str) -> String {
+        data.to_uppercase()
+    }
+}
+
+#[derive(Builder)]
+struct Pipeline {
+    name: String,
+    processor: Box<dyn Processor>,
+}
+
+#[test]
+fn test_box_dyn_trait_auto_wrap() {
+    // No need to manually wrap with Box::new!
+    let pipeline = PipelineBuilder::new()
+        .with_name("Transform".to_string())
+        .with_processor(UpperCaseProcessor)
+        .build();
+
+    assert_eq!(pipeline.name, "Transform");
+    assert_eq!(pipeline.processor.process("hello"), "HELLO");
+}
+
+// ============================================================================
+// Test 8: Multiple trait bounds (Arc<dyn Trait + Send + Sync>)
+// ============================================================================
+
+trait Handler: Send + Sync {
+    fn handle(&self, req: &str) -> String;
+}
+
+struct EchoHandler;
+
+impl Handler for EchoHandler {
+    fn handle(&self, req: &str) -> String {
+        format!("Echo: {}", req)
+    }
+}
+
+#[derive(Builder)]
+struct Server {
+    port: u16,
+    handler: Arc<dyn Handler + Send + Sync>,
+}
+
+#[test]
+fn test_multi_bound_auto_wrap() {
+    // Automatically handles Send + Sync bounds
+    let server = ServerBuilder::new()
+        .with_port(8080)
+        .with_handler(EchoHandler)
+        .build();
+
+    assert_eq!(server.port, 8080);
+    assert_eq!(server.handler.handle("test"), "Echo: test");
+}
+
+// ============================================================================
+// Test 9: Mixed fields - some wrapped, some not
+// ============================================================================
+
+#[derive(Builder)]
+struct Service {
+    name: String,
+    port: u16,
+    logger: Arc<dyn Logger>,
+    max_connections: usize,
+}
+
+#[test]
+fn test_mixed_wrapper_and_regular_fields() {
+    let service = ServiceBuilder::new()
+        .with_name("API".to_string())
+        .with_port(3000)
+        .with_logger(ConsoleLogger {
+            prefix: "API".to_string(),
+        })
+        .with_max_connections(100)
+        .build();
+
+    assert_eq!(service.name, "API");
+    assert_eq!(service.port, 3000);
+    assert_eq!(service.max_connections, 100);
+}
+
+// ============================================================================
+// Test 10: Arc/Box with #[incomplete] marker
+// ============================================================================
+
+#[derive(Builder)]
+struct Worker {
+    id: String,
+    #[incomplete]
+    processor: Arc<dyn Processor>,
+}
+
+#[test]
+fn test_wrapper_with_incomplete() {
+    // Can create incomplete without processor
+    let _incomplete: WorkerIncomplete = WorkerBuilder::new().with_id("worker-1".to_string());
+
+    // Can build complete with processor (auto-wrapped)
+    let complete = WorkerBuilder::new()
+        .with_id("worker-1".to_string())
+        .with_processor(UpperCaseProcessor)
+        .build();
+
+    assert_eq!(complete.id, "worker-1");
+}

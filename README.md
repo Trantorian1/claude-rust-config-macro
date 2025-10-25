@@ -7,6 +7,7 @@ A Rust procedural macro that generates type-safe builder patterns using the type
 - **Type-Safe Builders**: Generate builder structs with progressive type state
 - **Compile-Time Validation**: Ensure all fields are set before calling `build()`
 - **Optional Fields**: Mark fields as `#[incomplete]` to create partial configurations
+- **Smart Wrapping**: Automatic `Arc<dyn Trait>` and `Box<dyn Trait>` wrapping
 - **Zero Boilerplate**: Automatic builder generation from struct definitions
 - **No Name Conflicts**: Generated builders don't interfere with original structs
 
@@ -71,6 +72,53 @@ fn main() {
         .build();
 }
 ```
+
+### Smart Wrapping for Trait Objects
+
+The builder automatically wraps trait objects in `Arc` or `Box`, eliminating boilerplate:
+
+```rust
+use std::sync::Arc;
+
+trait Logger {
+    fn log(&self, msg: &str);
+}
+
+struct ConsoleLogger;
+
+impl Logger for ConsoleLogger {
+    fn log(&self, msg: &str) {
+        println!("{}", msg);
+    }
+}
+
+#[derive(Builder)]
+struct App {
+    name: String,
+    logger: Arc<dyn Logger>,
+}
+
+fn main() {
+    // No need for Arc::new()!
+    let app = AppBuilder::new()
+        .with_name("MyApp".to_string())
+        .with_logger(ConsoleLogger)  // Automatically wrapped in Arc
+        .build();
+
+    app.logger.log("Application started");
+}
+```
+
+**Supported patterns:**
+- `Arc<dyn Trait>` → Accepts `impl Trait + 'static`
+- `Box<dyn Trait>` → Accepts `impl Trait + 'static`
+- Multiple bounds: `Arc<dyn Trait + Send + Sync>` → Accepts `impl Trait + Send + Sync + 'static`
+
+**How it works:**
+- Builder methods detect `Arc<dyn Trait>` and `Box<dyn Trait>` field types
+- Instead of requiring the wrapped type, they accept `impl Trait`
+- The value is automatically wrapped with `Arc::new()` or `Box::new()`
+- Trait bounds are preserved, with `'static` added when needed
 
 ## How It Works
 
