@@ -20,11 +20,26 @@ pub fn derive_builder(input: TokenStream) -> TokenStream {
     let builder_name = create_builder_name(struct_name);
 
     // Generate all components
-    let builder_struct = generate_builder_struct(&builder_name, &fields);
-    let type_aliases = generate_type_aliases(struct_name, &builder_name, &fields);
-    let constructor = generate_constructor(&builder_name, &fields);
-    let builder_methods = generate_builder_methods(&builder_name, &fields);
-    let build_method = generate_build_method(struct_name, &builder_name, &fields);
+    let builder_struct = match generate_builder_struct(&builder_name, &fields) {
+        Ok(s) => s,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let type_aliases = match generate_type_aliases(struct_name, &builder_name, &fields) {
+        Ok(s) => s,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let constructor = match generate_constructor(&builder_name, &fields) {
+        Ok(s) => s,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let builder_methods = match generate_builder_methods(&builder_name, &fields) {
+        Ok(s) => s,
+        Err(err) => return err.to_compile_error().into(),
+    };
+    let build_method = match generate_build_method(struct_name, &builder_name, &fields) {
+        Ok(s) => s,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     let expanded = quote! {
         #builder_struct
@@ -108,32 +123,40 @@ struct CategorizedField {
 }
 
 /// Categorize a field as either default or regular
-fn categorize_field(field: &Field) -> CategorizedField {
+fn categorize_field(field: &Field) -> syn::Result<CategorizedField> {
     let name = field.ident.as_ref().unwrap().clone();
     let ty = field.ty.clone();
     let wrapper = analyze_field_type(&ty);
     let has_incomplete = has_incomplete_attr(field);
+    let default_value = extract_default_value(field);
 
-    // #[default] takes precedence over #[incomplete]
-    if let Some(default_value) = extract_default_value(field) {
-        CategorizedField {
+    // #[default] and #[incomplete] are mutually exclusive
+    if default_value.is_some() && has_incomplete {
+        return Err(syn::Error::new_spanned(
+            field,
+            "field cannot have both #[default] and #[incomplete] attributes - they are mutually exclusive"
+        ));
+    }
+
+    if let Some(default_value) = default_value {
+        Ok(CategorizedField {
             name,
             category: FieldCategory::Default { value: default_value, ty },
             wrapper,
-            has_incomplete: false,  // Default fields ignore #[incomplete]
-        }
+            has_incomplete: false,
+        })
     } else {
-        CategorizedField {
+        Ok(CategorizedField {
             name,
             category: FieldCategory::Regular { ty },
             wrapper,
             has_incomplete,
-        }
+        })
     }
 }
 
 /// Categorize all fields
-fn categorize_fields(fields: &[Field]) -> Vec<CategorizedField> {
+fn categorize_fields(fields: &[Field]) -> syn::Result<Vec<CategorizedField>> {
     fields.iter().map(categorize_field).collect()
 }
 
@@ -237,8 +260,8 @@ fn analyze_field_type(ty: &Type) -> WrapperType {
 // ============================================================================
 
 /// Generate the builder struct definition
-fn generate_builder_struct(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
-    let categorized = categorize_fields(fields);
+fn generate_builder_struct(builder_name: &Ident, fields: &[Field]) -> syn::Result<proc_macro2::TokenStream> {
+    let categorized = categorize_fields(fields)?;
 
     // Only non-default fields get generic parameters
     let type_params: Vec<_> = categorized
@@ -267,11 +290,11 @@ fn generate_builder_struct(builder_name: &Ident, fields: &[Field]) -> proc_macro
         })
         .collect();
 
-    quote! {
+    Ok(quote! {
         struct #builder_name<#(#type_params),*> {
             #(#field_defs),*
         }
-    }
+    })
 }
 
 /// Generate type aliases (conditionally Incomplete only)
@@ -279,10 +302,10 @@ fn generate_type_aliases(
     struct_name: &Ident,
     builder_name: &Ident,
     fields: &[Field],
-) -> proc_macro2::TokenStream {
+) -> syn::Result<proc_macro2::TokenStream> {
     // Only generate incomplete if there are #[incomplete] markers
     if has_any_incomplete_fields(fields) {
-        let categorized = categorize_fields(fields);
+        let categorized = categorize_fields(fields)?;
 
         // Only include regular fields in type parameters (default fields are concrete)
         let type_params_incomplete: Vec<_> = categorized
@@ -300,17 +323,17 @@ fn generate_type_aliases(
             .collect();
 
         let incomplete_name = create_type_alias_name(struct_name, "Incomplete");
-        quote! {
+        Ok(quote! {
             pub type #incomplete_name = #builder_name<#(#type_params_incomplete),*>;
-        }
+        })
     } else {
-        quote! {}
+        Ok(quote! {})
     }
 }
 
 /// Generate the new() constructor
-fn generate_constructor(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
-    let categorized = categorize_fields(fields);
+fn generate_constructor(builder_name: &Ident, fields: &[Field]) -> syn::Result<proc_macro2::TokenStream> {
+    let categorized = categorize_fields(fields)?;
 
     // Only regular fields get () type parameters
     let type_params: Vec<_> = categorized
@@ -338,7 +361,7 @@ fn generate_constructor(builder_name: &Ident, fields: &[Field]) -> proc_macro2::
         })
         .collect();
 
-    quote! {
+    Ok(quote! {
         impl #builder_name<#(#type_params),*> {
             pub fn new() -> Self {
                 Self {
@@ -346,12 +369,12 @@ fn generate_constructor(builder_name: &Ident, fields: &[Field]) -> proc_macro2::
                 }
             }
         }
-    }
+    })
 }
 
 /// Generate builder methods for each field
-fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macro2::TokenStream {
-    let categorized = categorize_fields(fields);
+fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> syn::Result<proc_macro2::TokenStream> {
+    let categorized = categorize_fields(fields)?;
 
     // Generate type parameters (only for regular fields)
     let type_params: Vec<_> = categorized
@@ -534,12 +557,12 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> proc_macr
         })
         .collect();
 
-    quote! {
+    Ok(quote! {
         impl<#(#type_params),*> #builder_name<#(#type_params),*> {
             #(#regular_methods)*
             #(#default_methods)*
         }
-    }
+    })
 }
 
 /// Generate build() method for fully concrete builder
@@ -547,8 +570,8 @@ fn generate_build_method(
     struct_name: &Ident,
     builder_name: &Ident,
     fields: &[Field],
-) -> proc_macro2::TokenStream {
-    let categorized = categorize_fields(fields);
+) -> syn::Result<proc_macro2::TokenStream> {
+    let categorized = categorize_fields(fields)?;
 
     // Only regular fields are type parameters (default fields are already concrete)
     let concrete_types: Vec<_> = categorized
@@ -562,7 +585,7 @@ fn generate_build_method(
     // All fields are included in the final struct
     let field_names: Vec<_> = categorized.iter().map(|f| &f.name).collect();
 
-    quote! {
+    Ok(quote! {
         impl #builder_name<#(#concrete_types),*> {
             pub fn build(self) -> #struct_name {
                 #struct_name {
@@ -570,5 +593,5 @@ fn generate_build_method(
                 }
             }
         }
-    }
+    })
 }

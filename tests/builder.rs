@@ -538,7 +538,7 @@ fn test_override_default_arc_wrapper() {
 }
 
 // ============================================================================
-// Test 15: Default field with #[incomplete] marker (default takes precedence)
+// Test 15: Mixing default fields with incomplete fields
 // ============================================================================
 
 #[derive(Builder)]
@@ -548,25 +548,24 @@ struct SecurityConfig {
     #[default("info")]
     log_level: &'static str,
     #[default(true)]
-    #[incomplete] // This should be ignored since #[default] takes precedence
     verify_ssl: bool,
 }
 
 #[test]
-fn test_default_overrides_incomplete() {
-    // Can build without setting verify_ssl (default takes precedence)
+fn test_default_with_incomplete_fields() {
+    // Can build with only api_key (defaults are optional)
     let config = SecurityConfigBuilder::new()
         .with_api_key("key123".to_string())
         .build();
 
     assert_eq!(config.api_key, "key123");
     assert_eq!(config.log_level, "info");
-    assert_eq!(config.verify_ssl, true); // Uses default, not incomplete
+    assert_eq!(config.verify_ssl, true);
 }
 
 #[test]
-fn test_incomplete_still_works_for_non_default() {
-    // Can create incomplete without api_key
+fn test_incomplete_with_defaults() {
+    // Can create incomplete without api_key (defaults are initialized)
     let _incomplete: SecurityConfigIncomplete = SecurityConfigBuilder::new();
 
     // Must provide api_key to build
@@ -575,6 +574,20 @@ fn test_incomplete_still_works_for_non_default() {
         .build();
 
     assert_eq!(complete.api_key, "key123");
+}
+
+#[test]
+fn test_override_defaults_with_incomplete() {
+    // Can override default values even with incomplete fields
+    let config = SecurityConfigBuilder::new()
+        .with_api_key("key123".to_string())
+        .with_log_level("debug")
+        .with_verify_ssl(false)
+        .build();
+
+    assert_eq!(config.api_key, "key123");
+    assert_eq!(config.log_level, "debug");
+    assert_eq!(config.verify_ssl, false);
 }
 
 // ============================================================================

@@ -115,7 +115,7 @@ fn main() {
 - Setters for default fields use mutable consuming pattern (`mut self -> Self`)
 - Default fields can be set in any order and are always optional
 - Works with complex types: `#[default(vec![])]`, `#[default(None)]`, `#[default(Arc::new(...))]`
-- When both `#[default(...)]` and `#[incomplete]` are present, `#[default]` takes precedence
+- `#[default]` and `#[incomplete]` are mutually exclusive - a field cannot have both attributes
 
 ### Smart Wrapping for Trait Objects
 
