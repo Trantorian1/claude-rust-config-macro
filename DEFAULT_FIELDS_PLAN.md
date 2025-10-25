@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add support for `#[default(value)]` attribute that allows fields to have default values in the builder. These fields are not part of the typestate progression and can be optionally overridden using mutable setter methods.
+Add support for `#[default(value)]` attribute that allows fields to have default values in the builder. These fields are not part of the typestate progression and can be optionally overridden using mutable consuming setter methods.
 
 ## Feature Requirements
 
@@ -43,15 +43,15 @@ struct Config {
    }
    ```
 
-3. **Default field setters** - Mutable, non-consuming:
+3. **Default field setters** - Mutable consuming:
    ```rust
-   pub fn with_foo(&mut self, foo: u8) -> &mut Self {
+   pub fn with_foo(mut self, foo: u8) -> Self {
        self.foo = foo;
        self
    }
    ```
 
-4. **Regular field setters** - Consuming (unchanged):
+4. **Regular field setters** - Consuming with type change (unchanged):
    ```rust
    pub fn with_baz(self, baz: u8) -> ConfigBuilder<u8> {
        ConfigBuilder { foo: self.foo, baz }
@@ -230,17 +230,17 @@ fn generate_constructor(builder_name: &Ident, fields: &[Field]) -> TokenStream {
 
 ### 5. Generate Two Types of Setters
 
-**For default fields - mutable, non-consuming:**
+**For default fields - mutable consuming:**
 
 ```rust
 // For field with #[default(42)]
-pub fn with_foo(&mut self, foo: u8) -> &mut Self {
+pub fn with_foo(mut self, foo: u8) -> Self {
     self.foo = foo;
     self
 }
 ```
 
-**For regular fields - consuming (current behavior):**
+**For regular fields - consuming with type change (current behavior):**
 
 ```rust
 // For field without #[default]
@@ -275,12 +275,12 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> TokenStre
 
             match &field.category {
                 FieldCategory::Default { ty, .. } => {
-                    // Mutable setter for default fields
+                    // Mutable consuming setter for default fields
                     match &field.wrapper {
                         WrapperType::Arc(bounds) => {
                             let trait_bounds = generate_trait_bounds(bounds);
                             quote! {
-                                pub fn #method_name(&mut self, #field_name: impl #trait_bounds) -> &mut Self {
+                                pub fn #method_name(mut self, #field_name: impl #trait_bounds) -> Self {
                                     self.#field_name = std::sync::Arc::new(#field_name);
                                     self
                                 }
@@ -289,7 +289,7 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> TokenStre
                         WrapperType::Box(bounds) => {
                             let trait_bounds = generate_trait_bounds(bounds);
                             quote! {
-                                pub fn #method_name(&mut self, #field_name: impl #trait_bounds) -> &mut Self {
+                                pub fn #method_name(mut self, #field_name: impl #trait_bounds) -> Self {
                                     self.#field_name = Box::new(#field_name);
                                     self
                                 }
@@ -297,7 +297,7 @@ fn generate_builder_methods(builder_name: &Ident, fields: &[Field]) -> TokenStre
                         }
                         WrapperType::None => {
                             quote! {
-                                pub fn #method_name(&mut self, #field_name: #ty) -> &mut Self {
+                                pub fn #method_name(mut self, #field_name: #ty) -> Self {
                                     self.#field_name = #field_name;
                                     self
                                 }
@@ -507,15 +507,15 @@ config: MyStruct
 
 All should work - we parse the expression and use it directly.
 
-### 4. Chaining with Mutable Setters
+### 4. Chaining Setters
 
-Users can chain mutable setters:
+Users can chain setters (all consuming):
 
 ```rust
 ConfigBuilder::new()
-    .with_foo(10)    // &mut Self
-    .with_foo(20)    // &mut Self, can override
-    .with_baz(30)    // Consumes, returns ConfigBuilder<u8>
+    .with_foo(10)    // mut self -> Self
+    .with_foo(20)    // mut self -> Self, can override
+    .with_baz(30)    // self -> ConfigBuilder<u8>
     .build()
 ```
 
@@ -604,13 +604,13 @@ impl ConfigBuilder {
 }
 ```
 
-### Test 6: Chaining Mutable Setters
+### Test 6: Chaining and Overriding Defaults
 ```rust
 #[test]
-fn test_chaining_mutable_setters() {
+fn test_chaining_and_overriding_defaults() {
     let config = ConfigBuilder::new()
         .with_timeout(100)
-        .with_timeout(200)  // Can override
+        .with_timeout(200)  // Can override - returns Self
         .with_url("test".to_string())
         .build();
 
@@ -657,15 +657,16 @@ let config = ServerConfigBuilder::new()
 assert_eq!(config.port, 3000);
 \```
 
-**Mutable setters:**
+**Mutable consuming setters:**
 
-Default fields use mutable setters (`&mut self`) instead of consuming setters, allowing multiple overrides:
+Default fields use mutable consuming setters (`mut self -> Self`) that allow overriding values while chaining:
 
 \```rust
-let mut builder = ServerConfigBuilder::new();
-builder.with_port(3000);
-builder.with_port(4000);  // Can override again
-let config = builder.with_host("localhost".to_string()).build();
+let config = ServerConfigBuilder::new()
+    .with_port(3000)
+    .with_port(4000)  // Can override - returns same type
+    .with_host("localhost".to_string())
+    .build();
 
 assert_eq!(config.port, 4000);
 \```
@@ -693,14 +694,14 @@ assert_eq!(config.port, 4000);
 
 ## Potential Issues
 
-### Issue 1: Mutable vs Consuming API
+### Issue 1: Different Return Types
 
-**Problem:** Mixing `&mut self` and `self` methods can be confusing.
+**Problem:** Default fields return `Self` while regular fields return `ConfigBuilder<NewType>`.
 
 **Solution:**
-- Clear documentation
+- Clear documentation explaining the difference
 - Consistent naming (all use `with_*`)
-- Examples showing both patterns
+- Both patterns are consuming, just different return types
 
 ### Issue 2: Default Expression Parsing
 
