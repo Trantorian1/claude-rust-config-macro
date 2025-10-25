@@ -41,6 +41,7 @@ fn test_builder_order_independence() {
 
 // Test 2: Struct with single #[incomplete] marker
 #[derive(Builder)]
+#[allow(dead_code)]
 struct DatabaseConfig {
     host: String,
     port: u16,
@@ -77,6 +78,7 @@ fn test_typestate_progression() {
 
 // Test 3: Struct with multiple #[incomplete] markers
 #[derive(Builder)]
+#[allow(dead_code)]
 struct AppConfig {
     name: String,
     version: String,
@@ -121,6 +123,7 @@ fn test_partial_incomplete() {
 
 // Test 4: Dynamic naming - different struct names
 #[derive(Builder)]
+#[allow(dead_code)]
 struct HttpClient {
     timeout: u64,
     #[incomplete]
@@ -128,6 +131,7 @@ struct HttpClient {
 }
 
 #[derive(Builder)]
+#[allow(dead_code)]
 struct Logger {
     level: String,
     output: String,
@@ -162,6 +166,7 @@ fn test_incomplete_type_alias_naming() {
 
 // Test 5: Complex types
 #[derive(Builder)]
+#[allow(dead_code)]
 struct CacheConfig {
     max_size: usize,
     ttl_seconds: u64,
@@ -297,6 +302,7 @@ fn test_multi_bound_auto_wrap() {
 // ============================================================================
 
 #[derive(Builder)]
+#[allow(dead_code)]
 struct Service {
     name: String,
     port: u16,
@@ -325,6 +331,7 @@ fn test_mixed_wrapper_and_regular_fields() {
 // ============================================================================
 
 #[derive(Builder)]
+#[allow(dead_code)]
 struct Worker {
     id: String,
     #[incomplete]

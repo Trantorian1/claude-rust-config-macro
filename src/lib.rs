@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
     parse_macro_input, DeriveInput, Data, Fields, Field, Ident, Type, Expr,
-    GenericArgument, PathArguments, TypeParamBound, TypeTraitObject,
+    GenericArgument, PathArguments, TypeParamBound,
 };
 
 #[proc_macro_derive(Builder, attributes(incomplete, default))]
@@ -161,12 +161,18 @@ fn categorize_fields(fields: &[Field]) -> syn::Result<Vec<CategorizedField>> {
 }
 
 /// Convert field name to PascalCase type parameter
+/// Converts snake_case like "api_key" to PascalCase like "ApiKey"
 fn field_name_to_type_param(name: &Ident) -> Ident {
     let name_str = name.to_string();
     let pascal_case = name_str
-        .chars()
-        .enumerate()
-        .map(|(i, c)| if i == 0 { c.to_ascii_uppercase() } else { c })
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
         .collect::<String>();
     Ident::new(&pascal_case, name.span())
 }
