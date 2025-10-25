@@ -190,7 +190,7 @@ fn test_complex_field_types() {
 
 use std::sync::Arc;
 
-trait Logger {
+trait LoggerTrait {
     fn log(&self, msg: &str);
 }
 
@@ -198,7 +198,7 @@ struct ConsoleLogger {
     prefix: String,
 }
 
-impl Logger for ConsoleLogger {
+impl LoggerTrait for ConsoleLogger {
     fn log(&self, msg: &str) {
         println!("{}: {}", self.prefix, msg);
     }
@@ -207,7 +207,7 @@ impl Logger for ConsoleLogger {
 #[derive(Builder)]
 struct App {
     name: String,
-    logger: Arc<dyn Logger>,
+    logger: Arc<dyn LoggerTrait>,
 }
 
 #[test]
@@ -228,13 +228,13 @@ fn test_arc_dyn_trait_auto_wrap() {
 // Test 7: Smart wrapping for Box<dyn Trait>
 // ============================================================================
 
-trait Processor {
+trait ProcessorTrait {
     fn process(&self, data: &str) -> String;
 }
 
 struct UpperCaseProcessor;
 
-impl Processor for UpperCaseProcessor {
+impl ProcessorTrait for UpperCaseProcessor {
     fn process(&self, data: &str) -> String {
         data.to_uppercase()
     }
@@ -243,7 +243,7 @@ impl Processor for UpperCaseProcessor {
 #[derive(Builder)]
 struct Pipeline {
     name: String,
-    processor: Box<dyn Processor>,
+    processor: Box<dyn ProcessorTrait>,
 }
 
 #[test]
@@ -262,13 +262,13 @@ fn test_box_dyn_trait_auto_wrap() {
 // Test 8: Multiple trait bounds (Arc<dyn Trait + Send + Sync>)
 // ============================================================================
 
-trait Handler: Send + Sync {
+trait HandlerTrait: Send + Sync {
     fn handle(&self, req: &str) -> String;
 }
 
 struct EchoHandler;
 
-impl Handler for EchoHandler {
+impl HandlerTrait for EchoHandler {
     fn handle(&self, req: &str) -> String {
         format!("Echo: {}", req)
     }
@@ -277,7 +277,7 @@ impl Handler for EchoHandler {
 #[derive(Builder)]
 struct Server {
     port: u16,
-    handler: Arc<dyn Handler + Send + Sync>,
+    handler: Arc<dyn HandlerTrait + Send + Sync>,
 }
 
 #[test]
@@ -300,7 +300,7 @@ fn test_multi_bound_auto_wrap() {
 struct Service {
     name: String,
     port: u16,
-    logger: Arc<dyn Logger>,
+    logger: Arc<dyn LoggerTrait>,
     max_connections: usize,
 }
 
@@ -328,7 +328,7 @@ fn test_mixed_wrapper_and_regular_fields() {
 struct Worker {
     id: String,
     #[incomplete]
-    processor: Arc<dyn Processor>,
+    processor: Arc<dyn ProcessorTrait>,
 }
 
 #[test]
