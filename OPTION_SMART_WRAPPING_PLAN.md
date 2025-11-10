@@ -3,8 +3,8 @@
 ## Goal
 Add automatic handling for `Option<T>` fields to improve ergonomics:
 - Fields of type `Option<T>` are initialized to `None` by default
-- Builder methods accept `T` instead of `Option<T>`
-- Values are automatically wrapped in `Some(T)`
+- Builder methods accept `impl Into<Option<T>>`
+- Users can pass either `T` (automatically wrapped in `Some`) or `Option<T>` (including `None`)
 
 ## Design Decisions
 
@@ -22,7 +22,29 @@ Add automatic handling for `Option<T>` fields to improve ergonomics:
 - Initialized to `None` in `new()`
 - Can be set at any time using mutable consuming pattern
 
-### 2. Interaction with Existing Attributes
+### 2. Builder Method Signature: `impl Into<Option<T>>`
+
+**Decision**: Builder methods for `Option<T>` fields accept `impl Into<Option<T>>`
+
+**Rationale**:
+- Rust implements `From<T> for Option<T>`, which provides automatic `Into<Option<T>>`
+- `Option<T>` also implements `Into<Option<T>>` (identity conversion)
+- Maximum flexibility: accept both `T` and `Option<T>`
+
+**Examples**:
+```rust
+// All of these work:
+builder.with_description("text".to_string())     // T -> Some(T)
+builder.with_description(Some("text".to_string())) // Option<T> -> Option<T>
+builder.with_description(None)                   // Option<T> -> None
+```
+
+**Benefits**:
+- Ergonomic: Can pass bare values for common case
+- Explicit control: Can pass `None` explicitly if needed
+- Type-safe: Compiler ensures correct types
+
+### 3. Interaction with Existing Attributes
 
 #### With `#[default(value)]`
 ```rust
@@ -31,7 +53,7 @@ count: Option<i32>,
 ```
 **Behavior**: Explicit default takes precedence
 - Initialize with `Some(42)` instead of `None`
-- Builder method still accepts `i32` and wraps in `Some`
+- Builder method still accepts `impl Into<Option<i32>>`
 - This allows non-None defaults
 
 #### With `#[incomplete]`
@@ -184,13 +206,18 @@ Add `Option` handling to both regular and default method generation:
 // In generate_builder_methods(), add Option case:
 WrapperType::Option(inner_ty) => {
     quote! {
-        pub fn #method_name(mut self, #field_name: #inner_ty) -> Self {
-            self.#field_name = Some(#field_name);
+        pub fn #method_name(mut self, #field_name: impl Into<Option<#inner_ty>>) -> Self {
+            self.#field_name = #field_name.into();
             self
         }
     }
 }
 ```
+
+**Key aspects**:
+- Parameter type: `impl Into<Option<T>>`
+- Assignment: `self.field = value.into()` - relies on Into trait
+- This automatically handles both `T` and `Option<T>` inputs
 
 ### Phase 5: Complex Combinations
 Handle combinations of Option with Arc/Box:
@@ -200,8 +227,8 @@ field: Option<Arc<dyn Trait>>
 
 **Approach**: Check for Option first, then check inner type for Arc/Box
 - Builder accepts `impl Trait`
-- Wraps in `Arc::new()` then `Some()`
-- Order: `Some(Arc::new(value))`
+- Wraps in `Arc::new()` then converts via `Into<Option<_>>`
+- Can also accept `Option<Arc<dyn Trait>>` explicitly
 
 **Update `analyze_field_type()`**:
 ```rust
@@ -233,6 +260,46 @@ enum WrapperType {
 }
 ```
 
+**Code generation for OptionArc/OptionBox**:
+```rust
+// For Option<Arc<dyn Trait>>
+WrapperType::OptionArc(bounds) => {
+    let trait_bounds = quote! { #(#bounds)+* + 'static };
+    quote! {
+        pub fn #method_name(
+            mut self,
+            #field_name: impl Into<Option<impl #trait_bounds>>
+        ) -> Self {
+            self.#field_name = #field_name.into().map(|v| std::sync::Arc::new(v));
+            self
+        }
+    }
+}
+
+// For Option<Box<dyn Trait>>
+WrapperType::OptionBox(bounds) => {
+    let trait_bounds = quote! { #(#bounds)+* + 'static };
+    quote! {
+        pub fn #method_name(
+            mut self,
+            #field_name: impl Into<Option<impl #trait_bounds>>
+        ) -> Self {
+            self.#field_name = #field_name.into().map(|v| Box::new(v));
+            self
+        }
+    }
+}
+```
+
+**Usage examples**:
+```rust
+// All of these work:
+builder.with_logger(ConsoleLogger)                      // T -> Some(Arc::new(T))
+builder.with_logger(Some(ConsoleLogger))                // Option<T> -> Option<Arc<T>>
+builder.with_logger(None)                               // None -> None
+builder.with_logger(Some(Arc::new(ConsoleLogger)))      // Option<Arc<T>> -> Option<Arc<T>>
+```
+
 ## Testing Strategy
 
 ### Test Cases to Add
@@ -245,15 +312,25 @@ struct Config {
     description: Option<String>,
 }
 
-// Should work:
+// All of these work:
 ConfigBuilder::new()
     .with_name("test".to_string())
     .build(); // description is None
 
 ConfigBuilder::new()
     .with_name("test".to_string())
-    .with_description("desc".to_string())  // Takes String, not Option<String>
-    .build(); // description is Some("desc")
+    .with_description("desc".to_string())  // Takes String -> Some("desc")
+    .build();
+
+ConfigBuilder::new()
+    .with_name("test".to_string())
+    .with_description(Some("desc".to_string()))  // Takes Option<String>
+    .build();
+
+ConfigBuilder::new()
+    .with_name("test".to_string())
+    .with_description(None)  // Explicitly set to None
+    .build();
 ```
 
 2. **Multiple Option fields**
@@ -348,23 +425,35 @@ fn main() {
     assert_eq!(config1.description, None);
     assert_eq!(config1.max_connections, None);
 
-    // Set optional fields - pass T, not Option<T>
+    // Set optional fields - pass T directly (most ergonomic)
     let config2 = ServerConfigBuilder::new()
         .with_host("localhost".to_string())
         .with_port(8080)
-        .with_description("My Server".to_string())  // Takes String
-        .with_max_connections(100)  // Takes usize
+        .with_description("My Server".to_string())  // T -> Some(T)
+        .with_max_connections(100)  // T -> Some(T)
         .build();
 
     assert_eq!(config2.description, Some("My Server".to_string()));
     assert_eq!(config2.max_connections, Some(100));
+
+    // Can also pass Option<T> explicitly
+    let config3 = ServerConfigBuilder::new()
+        .with_host("localhost".to_string())
+        .with_port(8080)
+        .with_description(Some("Explicit".to_string()))  // Option<T> -> Option<T>
+        .with_max_connections(None)  // Can explicitly set to None
+        .build();
+
+    assert_eq!(config3.description, Some("Explicit".to_string()));
+    assert_eq!(config3.max_connections, None);
 }
 \`\`\`
 
 **Key behaviors:**
 - `Option<T>` fields are initialized to `None` by default
-- Builder methods accept `T` instead of `Option<T>`
-- Values are automatically wrapped in `Some(T)`
+- Builder methods accept `impl Into<Option<T>>`
+- Can pass `T` (wrapped in `Some` automatically) or `Option<T>` (including `None`)
+- Maximum flexibility: ergonomic for common case, explicit control when needed
 - Can be combined with trait object wrapping: `Option<Arc<dyn Trait>>`
 - Can override default with `#[default(Some(value))]`
 ```
@@ -405,14 +494,19 @@ field: Result<T, E>,
 
 ## Summary
 
-This implementation provides ergonomic handling for optional fields while maintaining type safety and consistency with existing features. The key insight is treating `Option<T>` as having an implicit `#[default(None)]`, which aligns with developer expectations and reduces boilerplate.
+This implementation provides ergonomic handling for optional fields while maintaining type safety and consistency with existing features. The key insights are:
+
+1. **Implicit Default**: Treating `Option<T>` as having an implicit `#[default(None)]` aligns with developer expectations
+2. **Into Trait Pattern**: Using `impl Into<Option<T>>` provides maximum flexibility - both `T` and `Option<T>` work seamlessly
 
 **Benefits**:
-- More ergonomic API for optional fields
-- Less verbose builder method calls
-- Consistent with Arc/Box smart wrapping
-- Maintains type safety
+- **Most Ergonomic**: Pass bare values for common case (`"text"` instead of `Some("text")`)
+- **Explicit Control**: Can still pass `None` explicitly when needed
+- **Type Safe**: Compiler ensures correct types via Into trait
+- **Consistent**: Aligns with Arc/Box smart wrapping pattern
+- **Flexible**: Works with all combinations (Option, Arc, Box, etc.)
 
 **Minimal Breaking Changes**:
 - Existing code without `Option<T>` fields unaffected
 - Option fields that weren't working before now work better
+- No API changes to existing functionality
